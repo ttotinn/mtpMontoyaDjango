@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Totin Pro — Panel + Histórico</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdn.datatables.net/v/bs5/dt-2.1.5/b-3.1.2/datatables.min.css">
+  <script src="https://cdn.datatables.net/v/bs5/dt-2.1.5/b-3.1.2/datatables.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/3.1.2/js/dataTables.buttons.min.js"></script>
+  <script src="https://cdn.datatables.net/buttons/3.1.2/js/buttons.html5.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <h1>Totin Pro</h1>
+      <div class="tabs">
+        <button id="tab-panel" class="tabbtn active">Panel</button>
+        <button id="tab-historico" class="tabbtn">Histórico</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== PANEL ===== -->
+  <main id="view-panel" class="wrap">
+    <!-- Termómetros -->
+    <section class="cards">
+      <div class="card">
+        <h3>Sensor 1</h3>
+        <div class="temp-container">
+          <div class="value"><span id="s1">--</span><span class="unit">°C</span></div>
+          <div class="bar"><div id="bar1" class="fill"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Sensor 2</h3>
+        <div class="temp-container">
+          <div class="value"><span id="s2">--</span><span class="unit">°C</span></div>
+          <div class="bar"><div id="bar2" class="fill"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Última actualización</h3>
+        <div class="value time"><span id="lu">—</span></div>
+      </div>
+    </section>
+
+    <!-- Interruptores LED -->
+    <section class="actuators">
+      <div class="led-control">
+        <span>LED 1</span>
+        <label class="switch">
+          <input type="checkbox" id="led1-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="led-control">
+        <span>LED 2</span>
+        <label class="switch">
+          <input type="checkbox" id="led2-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Filtros gráfico -->
+    <section class="toolbar">
+      <div class="controls">
+        <button id="btn-s1" class="sensor-btn active"><span class="icon">🌡️</span> Sensor 1</button>
+        <button id="btn-s2" class="sensor-btn active"><span class="icon">🌡️</span> Sensor 2</button>
+        <label>Máx. puntos <input type="number" id="limit" min="1" max="5000" value="300"></label>
+        <label>Desde <input type="datetime-local" id="start"></label>
+        <label>Hasta <input type="datetime-local" id="end"></label>
+        <button class="btn apply" id="apply">Aplicar filtros</button>
+      </div>
+      <div class="mini" id="pointsInfo">—</div>
+    </section>
+
+    <section class="chartWrap"><canvas id="chart"></canvas></section>
+  </main>
+
+  <!-- ===== HISTÓRICO ===== -->
+  <main id="view-historico" class="wrap hidden">
+    <section class="subwrap">
+      <div class="filters">
+        <label>Desde <input type="datetime-local" id="t-start"></label>
+        <label>Hasta <input type="datetime-local" id="t-end"></label>
+        <label>Máx. filas <input type="number" id="t-limit" value="1000"></label>
+        <button class="btn apply" id="t-apply">Cargar tabla</button>
+      </div>
+      <table id="tbl" class="display" style="width:100%">
+        <thead><tr><th>ID</th><th>Sensor 1</th><th>Sensor 2</th><th>Fecha</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>©2025 Totin Pro — data.php + /api/temps + /api/led1 · /api/led2</footer>
+
+  <script>
+  const HISTORY_URL='data.php',REALTIME_URL='/api/temps';
+  const pad=n=>String(n).padStart(2,'0');
+  const fmtMini=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const toMySQLDateTime=val=>val?val.replace('T',' ')+(val.length===16?':00':''):'';
+  const range=[0,50];
+  
+  // Tabs
+  const tabP=document.getElementById('tab-panel'), tabH=document.getElementById('tab-historico');
+  const viewP=document.getElementById('view-panel'), viewH=document.getElementById('view-historico');
+  function showTab(p){ 
+    if(p==='panel'){ viewP.classList.remove('hidden'); viewH.classList.add('hidden'); tabP.classList.add('active'); tabH.classList.remove('active'); }
+    else{ viewH.classList.remove('hidden'); viewP.classList.add('hidden'); tabH.classList.add('active'); tabP.classList.remove('active'); if(!window._dtInit) loadTable(); }
+  }
+  tabP.onclick=()=>showTab('panel'); tabH.onclick=()=>showTab('hist');
+  
+  // Temperaturas
+  async function loadRealtime(){
+    try{
+      const res=await fetch(REALTIME_URL,{cache:'no-store'});
+      const rt=await res.json(),now=new Date();
+      updateTemp('s1','bar1',rt.sensor1);
+      updateTemp('s2','bar2',rt.sensor2);
+      document.getElementById('lu').textContent=fmtMini(now);
+    }catch{}
+  }
+  function updateTemp(txtId,barId,val){
+    const el=document.getElementById(txtId), bar=document.getElementById(barId);
+    const t=Math.max(range[0],Math.min(range[1],Number(val||0)));
+    el.textContent=t.toFixed(1);
+    const perc=((t-range[0])/(range[1]-range[0]))*100;
+    bar.style.width=perc+'%';
+    const hue=240-(perc*2.4); // azul a rojo
+    bar.style.background=`hsl(${hue},90%,55%)`;
+  }
+  
+  // LEDs (switch)
+  function ledToggle(id){
+    const el=document.getElementById(id);
+    el.addEventListener('change',()=>sendLed(`/api/${id.replace('-toggle','')}`,el.checked?'ON':'OFF'));
+  }
+  ledToggle('led1-toggle'); ledToggle('led2-toggle');
+  async function sendLed(url,state){
+    try{ await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state})}); }
+    catch(e){console.error(e);}
+  }
+
+  // Chart
+  const s1Btn=document.getElementById('btn-s1'), s2Btn=document.getElementById('btn-s2');
+  let chart;
+  function buildChart(labels,s1,s2){
+    const ctx=document.getElementById('chart').getContext('2d');
+    if(chart)chart.destroy();
+    chart=new Chart(ctx,{type:'line',data:{labels,datasets:[
+      {label:'Sensor 1',data:s1,borderColor:'#ff2e2e',borderWidth:2,tension:0.25,pointRadius:2.5},
+      {label:'Sensor 2',data:s2,borderColor:'#ff5656',borderWidth:2,tension:0.25,pointRadius:2.5}
+    ]},
+    options:{plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#aaa'},grid:{color:'rgba(255,255,255,0.06)'}},
+              y:{ticks:{color:'#aaa'},grid:{color:'rgba(255,255,255,0.06)'}}}}});
+  }
+  s1Btn.onclick=()=>{toggleSensor(0,s1Btn)};
+  s2Btn.onclick=()=>{toggleSensor(1,s2Btn)};
+  function toggleSensor(i,btn){chart.data.datasets[i].hidden=!chart.data.datasets[i].hidden;btn.classList.toggle('active');chart.update();}
+  
+  async function loadHistory(){
+    const params=new URLSearchParams();
+    const limit=document.getElementById('limit').value; params.set('limit',limit);
+    const s=toMySQLDateTime(document.getElementById('start').value), e=toMySQLDateTime(document.getElementById('end').value);
+    if(s)params.set('start',s); if(e)params.set('end',e);
+    const res=await fetch(`${HISTORY_URL}?${params}`,{cache:'no-store'});
+    const data=await res.json(); const labels=[],s1=[],s2=[];
+    for(const r of data){const d=new Date(r.fecha.replace(' ','T'));labels.push(fmtMini(d));s1.push(+r.sensor1);s2.push(+r.sensor2);}
+    buildChart(labels,s1,s2); document.getElementById('pointsInfo').textContent=`Puntos: ${labels.length}`;
+  }
+  document.getElementById('apply').onclick=loadHistory;
+  
+  // Tabla
+  let dt; window._dtInit=false;
+  async function loadTable(){
+    const params=new URLSearchParams();
+    params.set('limit',document.getElementById('t-limit').value);
+    const s=toMySQLDateTime(document.getElementById('t-start').value), e=toMySQLDateTime(document.getElementById('t-end').value);
+    if(s)params.set('start',s); if(e)params.set('end',e);
+    const res=await fetch(`${HISTORY_URL}?${params}`); const rows=await res.json();
+    const body=document.querySelector('#tbl tbody'); body.innerHTML='';
+    for(const r of rows){body.innerHTML+=`<tr><td>${r.id}</td><td>${r.sensor1}</td><td>${r.sensor2}</td><td>${r.fecha}</td></tr>`;}
+    if(dt)dt.destroy();
+    dt=new DataTable('#tbl',{pageLength:25,buttons:[{extend:'csvHtml5',text:'Exportar CSV'}],layout:{topStart:'buttons',topEnd:'search'}});
+    window._dtInit=true;
+  }
+  document.getElementById('t-apply').onclick=loadTable;
+  
+  // Init
+  (async()=>{
+  await loadHistory();
+  await loadRealtime();
+  setInterval(loadRealtime, 2000);    // tiempo real cada 2 s
+  setInterval(loadHistory, 30000);    // histórico cada 30 s (ajústalo si quieres)
+})();
+
+  </script>
+</body>
+</html>
+
